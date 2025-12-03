@@ -36,9 +36,7 @@ After extraction, I obtained **10,731 APEX frames** representing the moments of 
 | Anger | 113 | 1.1% |
 | Disgust | 105 | 1.0% | 
 | Sad | 41 | 0.4% | 
-| Fear | 19 | 0.2% |
-
-**Total**: 10,731 frames
+| Fear | 19 | 0.2% | **Total**: 10,731 frames
 
 
 
