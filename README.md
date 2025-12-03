@@ -127,7 +127,7 @@ Prediction: This new top-scoring emotion is used as the final prediction for acc
 I apply `np.argmax` to the output scores to identify the dominant emotion. This prediction is then compared against the CMED ground truth to calculate the final accuracy metric.
 
 
-# 2. Deepface 
+# 2. Deepface - VGG Face
 
 
 
