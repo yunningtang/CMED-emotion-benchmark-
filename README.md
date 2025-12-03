@@ -115,15 +115,11 @@ For the primary benchmark results, we utilized the Probability Masking strategy.
 
 How it works:
 
-    Inference: The model produces raw probability scores for all 8 classes.
-
-    Detection: We check if 'Contempt' has the highest probability.
-
-    Masking: If true, I manually set the probability of the 'Contempt' class to 0.0.
-
-    Re-evaluation: Then re-selecting the emotion with the next highest probability from the remaining 7 valid classes (e.g., Neutral, Anger, Disgust).
-
-    Prediction: This new top-scoring emotion is used as the final prediction for accuracy calculation.
+Inference: The model produces raw probability scores for all 8 classes.
+Detection: We check if 'Contempt' has the highest probability.
+Masking: If true, I manually set the probability of the 'Contempt' class to 0.0.
+Re-evaluation: Then re-selecting the emotion with the next highest probability from the remaining 7 valid classes (e.g., Neutral, Anger, Disgust).
+Prediction: This new top-scoring emotion is used as the final prediction for accuracy calculation.
 
 
 ###### Post-Processing
