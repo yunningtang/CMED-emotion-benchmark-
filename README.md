@@ -148,16 +148,6 @@ The confusion matrix provides a deeper insight into misclassifications. Notable 
 
 # 2. Deepface - FaceNet2 
 
-Here is the drafted **DeepFace** section for your README in English.
-
-I have structured it to professionally explain the testing of the three models while highlighting the unusual finding (identical accuracy) and focusing the visual results on FaceNet as requested.
-
------
-
-# 2\. DeepFace Benchmark
-
-To further evaluate performance, we utilized the **DeepFace** framework, a lightweight hybrid face recognition and facial attribute analysis framework for Python.
-
 ##### 1\. Model Selection & Experimental Setup
 
 We conducted a comparative analysis using three distinct state-of-the-art backends available within the DeepFace library:
