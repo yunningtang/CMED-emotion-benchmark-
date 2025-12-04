@@ -150,13 +150,13 @@ The confusion matrix provides a deeper insight into misclassifications. Notable 
 
 ##### 1\. Model Selection & Experimental Setup
 
-We conducted a comparative analysis using three distinct state-of-the-art backends available within the DeepFace library:
+I conducted a comparative analysis using three distinct state-of-the-art backends available within the DeepFace library:
 
 1.  **FaceNet** (Google)
 2.  **FaceNet512** (FaceNet with 512-d embeddings)
 3.  **VGG-Face** (Oxford)
 
-**Unexpected Uniformity in Performance:**
+**Uniformity in Performance:**
 A notable observation from our experiments was that **all three models achieved the exact same overall accuracy of 21.21%** (`0.212095797222999`).
 
 This identical performance across different architectures suggests a systematic bottleneck. It indicates that the performance constraints are likely due to the domain gap (DeepFace models are primarily trained on adult datasets like VGGFace2/Google Face, whereas CMED contains children) or the specific face alignment/detection pre-processing steps used in the DeepFace pipeline, rather than the feature extraction capabilities of the specific backends.
@@ -179,7 +179,7 @@ The charts below illustrate the detailed breakdown of the FaceNet performance:
 <p align="center">
   <img src="./DeepFace_FaceNet2.png" alt="Confusion Matrix" width="600">
 </p>
------
+
 
 
 # 3. LibraFace 
