@@ -183,14 +183,12 @@ The results indicate that off-the-shelf DeepFace models struggle significantly w
 
 The charts below illustrate the detailed breakdown of the FaceNet performance:
 
-  * **Left (Figure 1):** Accuracy per individual emotion category.
-  * **Right (Figure 2):** The Confusion Matrix showing prediction distribution.
-
-\<p align="center"\>
-\<img src="./DeepFace_FaceNet1.png" alt="FaceNet Accuracy per Emotion" width="45%" /\>
-\<img src="./DeepFace_FaceNet2.png" alt="FaceNet Confusion Matrix" width="45%" /\>
-\</p\>
-
+<p align="center">
+  <img src="./DeepFace_FaceNet1.png" alt="Confusion Matrix" width="600">
+</p>
+<p align="center">
+  <img src="./DeepFace_FaceNet2.png" alt="Confusion Matrix" width="600">
+</p>
 -----
 
 
