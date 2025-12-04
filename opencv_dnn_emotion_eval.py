@@ -1,391 +1,768 @@
-"""
-OpenCV Emotion Recognition Accuracy Test Script
+''' 
 
-This script tests emotion recognition accuracy on the CMED dataset using OpenCV DNN.
+Model: Emotion FERPlus
+Input: (N, 1, 64, 64) - Grayscale images
+Output: (1, 8) - Scores for 8 emotion classes
+Post-processing: Softmax to get probabilities [0, 1]
 
-Features:
-- Face detection using OpenCV DNN (or Haar Cascade fallback)
-- Emotion recognition using ONNX model (emotion-ferplus-8.onnx)
-- Per-class accuracy calculation
-- Confusion matrix generation
-- CSV export for further analysis
-
-Optional: For better face detection, download the DNN face detector:
-1. deploy.prototxt: https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt
-2. res10_300x300_ssd_iter_140000.caffemodel: https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel
-   Place both files in the same directory as this script.
-
-If not available, the script will automatically use Haar Cascade (built into OpenCV).
-"""
+'''
 
 import os
-import glob
 import cv2
 import numpy as np
-import csv
-from tqdm import tqdm
-from collections import Counter
-import time
-from sklearn.metrics import confusion_matrix
 import pandas as pd
+import onnxruntime as ort
+from pathlib import Path
+from tqdm import tqdm
+from datetime import datetime
+import json
 
-# --- 1. Configs ---
-# Dataset path (adjust if your images are in a different location)
-# Try proc/appearance/ if images are there, or data/CMED_Dataset/ if that's your structure
-DATASET_PATH = r"C:\Users\tangy\Desktop\CMED\proc\appearance"  # Change this to your image dataset path
-# Alternative: DATASET_PATH = r"C:\Users\tangy\Desktop\CMED\data\CMED_Dataset"
+# Configuration
 
-# ONNX model path
-MODEL_PATH = r"C:\Users\tangy\Desktop\CMED\emotion-ferplus-8.onnx"
+# CONTEMPT HANDLING STRATEGY (Choose one)
+# Options: "mask", "disgust", "neutral", "exclude"
+CONTEMPT_STRATEGY = "mask"  # Masking Strategy
 
-# Face detection model (OpenCV DNN - more robust than Haar Cascade)
-FACE_DETECTION_PROTO = "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt"
-FACE_DETECTION_MODEL = "https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
-FACE_DETECTION_PROTO_LOCAL = "deploy.prototxt"
-FACE_DETECTION_MODEL_LOCAL = "res10_300x300_ssd_iter_140000.caffemodel"
+# Paths
+MODEL_PATH = r"C:\Users\tangy\Desktop\CMED\models\emotion-ferplus-8.onnx"
+APEX_IMAGES_ROOT = r"C:\Users\tangy\Desktop\CMED\data\Apex_Images"
+CSV_PATH = r"C:\Users\tangy\Desktop\CMED\video_emotion_metadata_cleaned.csv"
+OUTPUT_DIR = "opencv_results"
 
-# CMED labels (folder names)
+# Create output directory
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Generate output filenames with strategy suffix
+timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+OUTPUT_EXCEL = os.path.join(OUTPUT_DIR, f"opencv_fer_results_{CONTEMPT_STRATEGY}_{timestamp}.xlsx")
+OUTPUT_JSON = os.path.join(OUTPUT_DIR, f"opencv_fer_results_{CONTEMPT_STRATEGY}_{timestamp}.json")
+OUTPUT_COMPARISON = os.path.join(OUTPUT_DIR, f"strategy_comparison_{timestamp}.xlsx")
+
+# OpenCV FER+ Official Label Mapping
+OPENCV_FER_LABELS = {
+    0: 'neutral',
+    1: 'happiness',
+    2: 'surprise',
+    3: 'sadness',
+    4: 'anger',
+    5: 'disgust',
+    6: 'fear',
+    7: 'contempt'
+}
+
+# CMED emotion labels (no contempt)
 CMED_LABELS = ['anger', 'disgust', 'fear', 'happy', 'no emotion', 'sad', 'surprise']
-# ONNX model labels (must match model output order)
-ONNX_LABELS = ['neutral', 'happiness', 'surprise', 'sadness', 'anger', 'disgust', 'fear', 'contempt']
 
-# Output file
-RESULTS_CSV = "experiment_results.csv" 
+# Contempt mapping strategies
+CONTEMPT_MAPPINGS = {
+    'disgust': 'disgust',  # Mapping Contempt to disgust
+    'neutral': 'neutral',  # Mapping Contempt to neutral（visual similary）
+}
 
-# --- 2. Face Detection Function ---
-def detect_face_dnn(image, face_net, confidence_threshold=0.5):
+# Preprocessing Functions
+
+
+def preprocess_image(image_path):
     """
-    Detect face using OpenCV DNN face detector.
-    Returns: (x, y, w, h) bounding box or None if no face found.
+    Preprocess image according to OpenCV FER+ requirements
+    
+    Official requirements:
+    - Input shape: (N, 1, 64, 64)
+    - Grayscale image
+    - Values: 0-255 (no normalization)
     """
     try:
-        h, w = image.shape[:2]
-        # Create blob from image
-        blob = cv2.dnn.blobFromImage(cv2.resize(image, (300, 300)), 1.0, (300, 300), [104, 117, 123])
-        face_net.setInput(blob)
-        detections = face_net.forward()
+        # Read image
+        img = cv2.imread(str(image_path))
         
-        # Find the best face detection
-        best_confidence = 0
-        best_box = None
+        if img is None:
+            raise ValueError(f"Cannot read image: {image_path}")
         
-        for i in range(detections.shape[2]):
-            confidence = detections[0, 0, i, 2]
-            if confidence > confidence_threshold and confidence > best_confidence:
-                # Get bounding box coordinates
-                x1 = int(detections[0, 0, i, 3] * w)
-                y1 = int(detections[0, 0, i, 4] * h)
-                x2 = int(detections[0, 0, i, 5] * w)
-                y2 = int(detections[0, 0, i, 6] * h)
-                
-                # Ensure coordinates are within image bounds
-                x1 = max(0, x1)
-                y1 = max(0, y1)
-                x2 = min(w, x2)
-                y2 = min(h, y2)
-                
-                best_confidence = confidence
-                best_box = (x1, y1, x2 - x1, y2 - y1)  # (x, y, w, h)
-        
-        return best_box
-    except Exception as e:
-        return None
-
-def detect_face_haar(image, face_cascade):
-    """
-    Fallback: Detect face using Haar Cascade (if DNN fails).
-    Returns: (x, y, w, h) bounding box or None if no face found.
-    """
-    try:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-        if len(faces) > 0:
-            # Return the largest face
-            faces = sorted(faces, key=lambda x: x[2] * x[3], reverse=True)
-            return tuple(faces[0])  # (x, y, w, h)
-        return None
-    except Exception as e:
-        return None
-
-# --- 3. Preprocessing function ---
-def preprocess_for_onnx(face_roi):
-    """
-    Pre-processing for ferplus-8 model.
-    Needs: 1x64x64 grayscale
-    """
-    try:
-        # 1. Convert to grayscale if needed
-        if len(face_roi.shape) == 3:
-            img_gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
+        # Convert to grayscale
+        if len(img.shape) == 3:
+            img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         else:
-            img_gray = face_roi
-        # 2. Resize to 64x64
-        img_resized = cv2.resize(img_gray, (64, 64))
-        # 3. Convert to float32
+            img_gray = img
+        
+        # Resize to 64x64
+        img_resized = cv2.resize(img_gray, (64, 64), interpolation=cv2.INTER_LINEAR)
+        
+        # Convert to float32 (keep range 0-255)
         img_float = img_resized.astype(np.float32)
-        # 4. Add batch & channel dims (N, C, H, W) -> [1, 1, 64, 64]
-        blob = np.expand_dims(np.expand_dims(img_float, axis=0), axis=0)
-        return blob
+        
+        # Add batch and channel dimensions: (1, 1, 64, 64)
+        img_preprocessed = np.expand_dims(np.expand_dims(img_float, axis=0), axis=0)
+        
+        return img_preprocessed
+        
     except Exception as e:
-        return None
+        raise Exception(f"Preprocessing failed for {image_path}: {str(e)}")
 
-# --- 4. Label Mapping Function ---
-def map_onnx_to_cmed(onnx_label):
+
+def softmax(scores):
     """
-    Map ONNX model output labels to CMED labels.
+    Softmax function to convert scores to probabilities
+    """
+    exp_scores = np.exp(scores - np.max(scores))
+    probabilities = exp_scores / np.sum(exp_scores)
+    return probabilities
+
+
+# Contempt Handling Strategies
+
+
+def handle_contempt_mask(probabilities, raw_scores):
+    """
+    Strategy 1: Probability Masking 
+    Masking the probability of contempt, only choose the highest probability emotion from the remaining 7 emotions. 
+
+    Returns:
+        dict with prediction results
+    """
+    # Create a copy to avoid modifying the original data
+    masked_probs = probabilities.copy()
+    
+    # Set the probability of contempt (index 7) to 0
+    masked_probs[7] = 0.0
+    
+    # Find the highest probability emotion from the remaining 7 emotions
+    predicted_index = int(np.argmax(masked_probs))
+    predicted_label = OPENCV_FER_LABELS[predicted_index]
+    confidence = float(probabilities[predicted_index])  # Use the original probability as confidence
+    
+    # Create a probability dictionary (keep the original probabilities of all 8 emotions)
+    prob_dict = {
+        OPENCV_FER_LABELS[i]: float(probabilities[i])
+        for i in range(len(OPENCV_FER_LABELS))
+    }
+    
+    # Mark this is a prediction through mask
+    is_masked = (np.argmax(probabilities) == 7)  # Whether the originally highest emotion is contempt
+    
+    return {
+        'predicted_label': predicted_label,
+        'predicted_index': predicted_index,
+        'confidence': confidence,
+        'probabilities': prob_dict,
+        'raw_scores': raw_scores.tolist(),
+        'is_masked': is_masked,  # Whether contempt is masked
+        'original_top_class': OPENCV_FER_LABELS[np.argmax(probabilities)],  # The originally highest emotion
+        'strategy': 'mask'
+    }
+
+
+def handle_contempt_mapping(probabilities, raw_scores, mapping):
+    """
+    Strategy 2 & 3: Map contempt to another emotion
+    
+    Args:
+        probabilities: Probabilities after softmax (8,)
+        raw_scores: Original scores (8,)
+        mapping: 'disgust' or 'neutral'
+    
+    Returns:
+        dict with prediction results
+    """
+    # Normal argmax prediction
+    predicted_index = int(np.argmax(probabilities))
+    predicted_label = OPENCV_FER_LABELS[predicted_index]
+    confidence = float(probabilities[predicted_index])
+    
+    # If the prediction is contempt, map to the specified category
+    if predicted_label == 'contempt':
+        predicted_label = CONTEMPT_MAPPINGS[mapping]
+    
+    prob_dict = {
+        OPENCV_FER_LABELS[i]: float(probabilities[i])
+        for i in range(len(OPENCV_FER_LABELS))
+    }
+    
+    return {
+        'predicted_label': predicted_label,
+        'predicted_index': predicted_index,
+        'confidence': confidence,
+        'probabilities': prob_dict,
+        'raw_scores': raw_scores.tolist(),
+        'is_mapped': (OPENCV_FER_LABELS[predicted_index] == 'contempt'),
+        'strategy': mapping
+    }
+
+
+def handle_contempt_exclude(probabilities, raw_scores):
+    """
+    Strategy 4: Exclude contempt predictions
+    
+    Returns None if predicted as contempt
+    """
+    predicted_index = int(np.argmax(probabilities))
+    predicted_label = OPENCV_FER_LABELS[predicted_index]
+    
+    # If the prediction is contempt, return None to exclude
+    if predicted_label == 'contempt':
+        return None
+    
+    confidence = float(probabilities[predicted_index])
+    
+    prob_dict = {
+        OPENCV_FER_LABELS[i]: float(probabilities[i])
+        for i in range(len(OPENCV_FER_LABELS))
+    }
+    
+    return {
+        'predicted_label': predicted_label,
+        'predicted_index': predicted_index,
+        'confidence': confidence,
+        'probabilities': prob_dict,
+        'raw_scores': raw_scores.tolist(),
+        'strategy': 'exclude'
+    }
+
+
+
+# Model Class
+
+class OpenCVFERModel:
+    """
+    OpenCV FER+ model wrapper with configurable contempt handling
+    """
+    
+    def __init__(self, model_path, contempt_strategy='mask'):
+        """
+        Initialize model
+        
+        Args:
+            model_path: Path to ONNX model file
+            contempt_strategy: How to handle contempt predictions
+                - 'mask': Probability masking 
+                - 'disgust': Map to disgust
+                - 'neutral': Map to neutral
+                - 'exclude': Exclude from evaluation
+        """
+        self.model_path = model_path
+        self.contempt_strategy = contempt_strategy
+        self.session = None
+        self.input_name = None
+        self.output_name = None
+        self._load_model()
+    
+    def _load_model(self):
+        """Load ONNX model"""
+        try:
+            self.session = ort.InferenceSession(self.model_path)
+            self.input_name = self.session.get_inputs()[0].name
+            self.output_name = self.session.get_outputs()[0].name
+            
+            print(f" Model loaded: {self.model_path}")
+            print(f" Contempt strategy: {self.contempt_strategy}")
+            
+        except Exception as e:
+            raise Exception(f"Failed to load model: {str(e)}")
+    
+    def predict(self, image_path):
+        """
+        Predict emotion for a single image
+        
+        Args:
+            image_path: Path to input image
+            
+        Returns:
+            dict with prediction results, or None if excluded
+        """
+        # Preprocess image
+        img_preprocessed = preprocess_image(image_path)
+        
+        # Run inference - get raw scores
+        raw_scores = self.session.run(
+            [self.output_name],
+            {self.input_name: img_preprocessed}
+        )[0][0]  # Shape: (8,)
+        
+        # Apply softmax to get probabilities
+        probabilities = softmax(raw_scores)
+        
+        # Handle contempt based on strategy
+        if self.contempt_strategy == 'mask':
+            return handle_contempt_mask(probabilities, raw_scores)
+        
+        elif self.contempt_strategy in ['disgust', 'neutral']:
+            return handle_contempt_mapping(probabilities, raw_scores, self.contempt_strategy)
+        
+        elif self.contempt_strategy == 'exclude':
+            return handle_contempt_exclude(probabilities, raw_scores)
+        
+        else:
+            raise ValueError(f"Unknown strategy: {self.contempt_strategy}")
+
+
+
+# Label Mapping for Evaluation
+
+def get_cmed_label(opencv_label):
+    """
+    Map OpenCV label to CMED label for evaluation
     """
     mapping = {
-        'neutral': 'no emotion',
+        'neutral': 'neutral',
         'happiness': 'happy',
+        'surprise': 'surprise',
         'sadness': 'sad',
-        'anger': 'anger',
+        'anger': 'angry',
         'disgust': 'disgust',
         'fear': 'fear',
-        'surprise': 'surprise',
-        'contempt': 'no emotion'  # Map contempt to no emotion
+        'contempt': None  # Should not appear if using mask strategy
     }
-    return mapping.get(onnx_label, 'no emotion')
+    return mapping.get(opencv_label)
 
-# --- 5. Main test function ---
-def run_opencv_test():
-    print("--- Starting OpenCV (DNN) Image Accuracy Test ---")
-    print("=" * 60)
-    start_time = time.time()
+
+# Dataset Testing
+
+
+def find_image_path(emotion, subject, filename, apex_frame, images_root):
+    """Find the actual image file path"""
+    video_base = filename.replace('.mp4', '')
+    image_filename = f"{subject}_{video_base}_f{int(apex_frame)}.jpg"
     
-    # Check if model exists
-    if not os.path.exists(MODEL_PATH):
-        print(f"FATAL ERROR: Model file not found! {MODEL_PATH}")
-        print("\nTo download a compatible emotion recognition model:")
-        print("1. Visit: https://github.com/onnx/models/tree/main/vision/body_analysis/emotion_ferplus")
-        print("2. Download emotion-ferplus-8.onnx")
-        print("3. Place it in the same directory as this script")
-        return
+    emotion_variants = [
+        emotion,
+        emotion.replace(' ', '_'),
+        emotion.replace(' ', '_').title(),
+        emotion.title()
+    ]
     
-    # Load the emotion recognition DNN model
-    try:
-        emotion_net = cv2.dnn.readNet(MODEL_PATH)
-        print(f" Emotion model loaded: {MODEL_PATH}")
-    except Exception as e:
-        print(f"FATAL ERROR: Could not load model {MODEL_PATH}. Error: {e}")
-        return
+    for emo_var in emotion_variants:
+        image_path = Path(images_root) / emo_var / image_filename
+        if image_path.exists():
+            return image_path
     
-    # Load face detection model (try DNN first, fallback to Haar Cascade)
-    face_net = None
-    face_cascade = None
+    return None
+
+
+def test_dataset(model, csv_path, images_root, output_excel, output_json):
+    """
+    Test model on entire CMED dataset
+    """
+    print("\n" + "=" * 80)
+    print(f"Testing OpenCV FER+ with Strategy: {model.contempt_strategy.upper()}")
+    print("=" * 80)
     
-    # Try to load DNN face detector
-    if os.path.exists(FACE_DETECTION_PROTO_LOCAL) and os.path.exists(FACE_DETECTION_MODEL_LOCAL):
+    # Load metadata
+    print(f"\nLoading metadata: {csv_path}")
+    df = pd.read_csv(csv_path)
+    print(f" Loaded {len(df)} samples")
+    
+    # Normalize column names
+    df.columns = df.columns.str.lower().str.replace(' ', '_')
+    
+    # Statistics
+    stats = {
+        'total': len(df),
+        'processed': 0,
+        'success': 0,
+        'failed': 0,
+        'excluded': 0,  # The number of contempt excluded
+        'masked': 0,    # The number of contempt masked
+        'correct': 0,
+        'errors': [],
+        'contempt_cases': []  # Record contempt related cases
+    }
+    
+    results = []
+    
+    # Process each sample
+    print("\nProcessing samples...")
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Testing"):
         try:
-            face_net = cv2.dnn.readNetFromCaffe(FACE_DETECTION_PROTO_LOCAL, FACE_DETECTION_MODEL_LOCAL)
-            print(f" DNN Face detector loaded")
-        except:
-            pass
-    
-    # Fallback to Haar Cascade (built into OpenCV)
-    if face_net is None:
-        try:
-            cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            face_cascade = cv2.CascadeClassifier(cascade_path)
-            if face_cascade.empty():
-                raise Exception("Haar Cascade not loaded")
-            print(f"✓ Haar Cascade face detector loaded (fallback)")
-        except Exception as e:
-            print(f"WARNING: Could not load face detector. Error: {e}")
-            print("Continuing without face detection (will use full image)...")
-    
-    print()
-    
-    # Storage for results
-    all_results = []  # For CSV: True_Label, Predicted_Label, Is_Correct, Confidence_Score
-    class_counts = {label: 0 for label in CMED_LABELS}  # Count per class
-    class_correct = {label: 0 for label in CMED_LABELS}  # Correct predictions per class
-    
-    total_images = 0
-    images_without_face = 0
-    
-    # Loop over each emotion folder
-    for true_label in tqdm(CMED_LABELS, desc="Overall Progress"):
-        folder_path = os.path.join(DATASET_PATH, true_label)
-        
-        if not os.path.exists(folder_path):
-            print(f"Warning: Folder not found: {folder_path}")
-            continue
-        
-        # Find all images (recursive)
-        image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.JPG', '*.JPEG', '*.PNG']
-        image_paths = []
-        for ext in image_extensions:
-            image_paths.extend(glob.glob(os.path.join(folder_path, "**", ext), recursive=True))
-        
-        if not image_paths:
-            print(f"Warning: No images found in {folder_path}")
-            continue
-        
-        # Process each image
-        for image_path in tqdm(image_paths, desc=f"Processing {true_label}", leave=False):
-            try:
-                # Read image
-                image = cv2.imread(image_path)
-                if image is None:
-                    continue
-                
-                total_images += 1
-                class_counts[true_label] += 1
-                
-                # Detect face
-                face_box = None
-                if face_net is not None:
-                    face_box = detect_face_dnn(image, face_net)
-                elif face_cascade is not None:
-                    face_box = detect_face_haar(image, face_cascade)
-                
-                # Extract face ROI or use full image if no face detected
-                if face_box is not None:
-                    x, y, w, h = face_box
-                    # Add some padding
-                    padding = 10
-                    x = max(0, x - padding)
-                    y = max(0, y - padding)
-                    w = min(image.shape[1] - x, w + 2 * padding)
-                    h = min(image.shape[0] - y, h + 2 * padding)
-                    face_roi = image[y:y+h, x:x+w]
-                else:
-                    images_without_face += 1
-                    # Use full image if no face detected
-                    face_roi = image
-                
-                if face_roi.size == 0:
-                    continue
-                
-                # Preprocess for emotion model
-                blob = preprocess_for_onnx(face_roi)
-                if blob is None:
-                    continue
-                
-                # Emotion inference
-                try:
-                    emotion_net.setInput(blob)
-                    predictions = emotion_net.forward()
-                    
-                    # Get predicted emotion and confidence
-                    predicted_index = np.argmax(predictions)
-                    confidence_score = float(predictions[0][predicted_index])
-                    predicted_emotion_onnx = ONNX_LABELS[predicted_index]
-                    
-                    # Map to CMED label
-                    predicted_emotion = map_onnx_to_cmed(predicted_emotion_onnx)
-                    
-                    # Check if correct
-                    is_correct = 1 if predicted_emotion.lower() == true_label.lower() else 0
-                    
-                    if is_correct:
-                        class_correct[true_label] += 1
-                    
-                    # Store result for CSV
-                    all_results.append({
-                        'True_Label': true_label,
-                        'Predicted_Label': predicted_emotion,
-                        'Is_Correct': is_correct,
-                        'Confidence_Score': confidence_score
-                    })
-                    
-                except Exception as e:
-                    # Inference failed
-                    all_results.append({
-                        'True_Label': true_label,
-                        'Predicted_Label': 'unknown',
-                        'Is_Correct': 0,
-                        'Confidence_Score': 0.0
-                    })
-                    
-            except Exception as e:
-                # Image processing failed
+            # Get metadata
+            subject = str(row['subject'])
+            emotion_cmed = str(row['emotion'])
+            filename = str(row['filename'])
+            apex_frame = row['apex_frame']
+            
+            # Find image path
+            image_path = find_image_path(
+                emotion_cmed, subject, filename, apex_frame, images_root
+            )
+            
+            if image_path is None:
+                stats['failed'] += 1
+                stats['errors'].append({
+                    'row': idx,
+                    'reason': 'Image file not found',
+                    'emotion': emotion_cmed,
+                    'subject': subject,
+                    'filename': filename
+                })
                 continue
+            
+            # Predict
+            prediction = model.predict(image_path)
+            
+            # Check if excluded (strategy='exclude' and predicted contempt)
+            if prediction is None:
+                stats['excluded'] += 1
+                stats['contempt_cases'].append({
+                    'row': idx,
+                    'true_emotion': emotion_cmed,
+                    'action': 'excluded'
+                })
+                continue
+            
+            # Record if masked
+            if prediction.get('is_masked', False):
+                stats['masked'] += 1
+                stats['contempt_cases'].append({
+                    'row': idx,
+                    'true_emotion': emotion_cmed,
+                    'original_prediction': prediction['original_top_class'],
+                    'masked_prediction': prediction['predicted_label'],
+                    'action': 'masked'
+                })
+            
+            # Get predicted label
+            predicted_opencv = prediction['predicted_label']
+            predicted_cmed = get_cmed_label(predicted_opencv)
+            
+            # Map true emotion to comparable format
+            true_emotion_normalized = emotion_cmed.lower().replace(' ', '_')
+            if true_emotion_normalized == 'no_emotion':
+                true_emotion_normalized = 'neutral'
+            elif true_emotion_normalized == 'anger':
+                true_emotion_normalized = 'angry'
+            
+            # Check correctness
+            is_correct = (predicted_cmed == true_emotion_normalized)
+            
+            if is_correct:
+                stats['correct'] += 1
+            
+            # Calculate confidence gap
+            sorted_probs = sorted(prediction['probabilities'].values(), reverse=True)
+            confidence_gap = sorted_probs[0] - sorted_probs[1] if len(sorted_probs) > 1 else sorted_probs[0]
+            
+            # Store result
+            result = {
+                'file_name': image_path.name,
+                'parent_folder': subject,
+                'folder_label': emotion_cmed,
+                'true_emotion': true_emotion_normalized,
+                'predicted_emotion': predicted_cmed,
+                'predicted_opencv_label': predicted_opencv,
+                'is_correct': is_correct,
+                'confidence': prediction['confidence'],
+                'confidence_gap': confidence_gap,
+                'probabilities': prediction['probabilities'],
+                'raw_scores': prediction['raw_scores'],
+                'strategy': prediction['strategy'],
+                'is_masked': prediction.get('is_masked', False),
+                'original_top_class': prediction.get('original_top_class', predicted_opencv)
+            }
+            
+            results.append(result)
+            stats['success'] += 1
+            stats['processed'] += 1
+            
+        except Exception as e:
+            stats['failed'] += 1
+            stats['errors'].append({
+                'row': idx,
+                'reason': str(e),
+                'emotion': emotion_cmed if 'emotion_cmed' in locals() else 'Unknown'
+            })
     
-    if total_images == 0:
-        print("ERROR: No processable image files were found in the dataset.")
-        print(f"Checked path: {DATASET_PATH}")
+    # Save results
+    print("\n" + "=" * 80)
+    print("Saving Results")
+    print("=" * 80)
+    
+    # Convert to DataFrame
+    df_results = pd.DataFrame(results)
+    
+    # Save Excel
+    print(f"\nSaving to Excel: {output_excel}")
+    df_results.to_excel(output_excel, index=False)
+    print(f" Excel saved: {len(df_results)} rows")
+    
+    # Save JSON
+    print(f"\nSaving to JSON: {output_json}")
+    results_json = {
+        'metadata': {
+            'model': 'OpenCV FER+',
+            'model_path': MODEL_PATH,
+            'dataset': 'CMED',
+            'contempt_strategy': model.contempt_strategy,
+            'total_samples': stats['total'],
+            'processed': stats['processed'],
+            'timestamp': datetime.now().isoformat()
+        },
+        'statistics': stats,
+        'results': results
+    }
+    
+    with open(output_json, 'w', encoding='utf-8') as f:
+        json.dump(results_json, f, indent=2, ensure_ascii=False)
+    print(f" JSON saved")
+    
+    # Print statistics
+    print("\n" + "=" * 80)
+    print("Testing Summary")
+    print("=" * 80)
+    print(f"\nStrategy: {model.contempt_strategy.upper()}")
+    print(f"\nTotal samples: {stats['total']}")
+    print(f"Processed: {stats['processed']}")
+    print(f"Success: {stats['success']}")
+    print(f"Failed: {stats['failed']}")
+    
+    if model.contempt_strategy == 'mask':
+        print(f"Masked (contempt was top-1): {stats['masked']}")
+    elif model.contempt_strategy == 'exclude':
+        print(f"Excluded (contempt predictions): {stats['excluded']}")
+    
+    print(f"\nCorrect predictions: {stats['correct']}")
+    
+    if stats['success'] > 0:
+        accuracy = stats['correct'] / stats['success']
+        print(f"Accuracy: {accuracy:.4f} ({stats['correct']}/{stats['success']})")
+    
+    # Print contempt cases summary
+    if stats['contempt_cases']:
+        print(f"\nContempt-related cases: {len(stats['contempt_cases'])}")
+        if model.contempt_strategy == 'mask':
+            print(f"  (Cases where contempt was originally predicted as top-1)")
+            print(f"  These were re-predicted using the next highest probability")
+        elif model.contempt_strategy == 'exclude':
+            print(f"  (Cases excluded from evaluation)")
+    
+    if stats['errors']:
+        print(f"\nErrors: {len(stats['errors'])}")
+        print("First 5 errors:")
+        for error in stats['errors'][:5]:
+            print(f"  - Row {error['row']}: {error['reason']}")
+    
+    print("\n" + "=" * 80)
+    print("Testing Complete. ")
+    print("=" * 80)
+    
+    return df_results, stats
+
+
+
+# Strategy Comparison
+
+def compare_strategies(csv_path, images_root):
+    """
+    Test all strategies and compare results
+    """
+    print("\n" + "=" * 80)
+    print("COMPARING ALL CONTEMPT HANDLING STRATEGIES")
+    print("=" * 80)
+    
+    strategies = ['mask', 'disgust', 'neutral', 'exclude']
+    comparison_results = {}
+    
+    for strategy in strategies:
+        print(f"\n{'='*80}")
+        print(f"Testing Strategy: {strategy.upper()}")
+        print(f"{'='*80}")
+        
+        # Create model with this strategy
+        model = OpenCVFERModel(MODEL_PATH, contempt_strategy=strategy)
+        
+        # Generate output paths
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_excel = os.path.join(OUTPUT_DIR, f"opencv_fer_results_{strategy}_{timestamp}.xlsx")
+        output_json = os.path.join(OUTPUT_DIR, f"opencv_fer_results_{strategy}_{timestamp}.json")
+        
+        # Test
+        df_results, stats = test_dataset(model, csv_path, images_root, output_excel, output_json)
+        
+        # Store comparison data
+        accuracy = stats['correct'] / stats['success'] if stats['success'] > 0 else 0
+        comparison_results[strategy] = {
+            'total': stats['total'],
+            'processed': stats['processed'],
+            'success': stats['success'],
+            'correct': stats['correct'],
+            'accuracy': accuracy,
+            'excluded': stats.get('excluded', 0),
+            'masked': stats.get('masked', 0),
+            'contempt_cases': len(stats.get('contempt_cases', []))
+        }
+    
+    # Create comparison DataFrame
+    df_comparison = pd.DataFrame(comparison_results).T
+    df_comparison.index.name = 'Strategy'
+    
+    # Save comparison
+    comparison_path = OUTPUT_COMPARISON
+    df_comparison.to_excel(comparison_path)
+    
+    print("\n" + "=" * 80)
+    print("STRATEGY COMPARISON SUMMARY")
+    print("=" * 80)
+    print("\n" + df_comparison.to_string())
+    print(f"\n Comparison saved to: {comparison_path}")
+    
+    # Print recommendations
+    print("\n" + "=" * 80)
+    print("RECOMMENDATIONS")
+    print("=" * 80)
+    print("""
+'mask' (Probability Masking) 
+  - Most fair and rigorous approach
+  - Asks: "If not contempt, what's the next best match?"
+  - Reflects model's true ability on CMED's 7 emotions
+  
+'disgust' (Map to Disgust)
+  - Psychologically justified (Ekman's theory)
+  - Use if contempt predictions are rare (<1%)
+  
+'neutral' (Map to Neutral)
+  - Visually similar expressions
+  - Conservative approach
+  
+'exclude' (Exclude Contempt)
+  - Most conservative
+  - Use only if contempt predictions are very frequent (>5%)
+    """)
+    
+    return df_comparison
+
+
+
+# Validation
+
+
+def validate_model_setup():
+    """Validate setup before running full test"""
+    print("=" * 80)
+    print("Validating Model Setup")
+    print("=" * 80)
+    
+    # Check model file
+    print("\n1. Checking model file...")
+    if not os.path.exists(MODEL_PATH):
+        print(f" Model file not found: {MODEL_PATH}")
+        return False
+    print(f" Model file exists")
+    
+    # Check CSV
+    print("\n2. Checking metadata CSV...")
+    if not os.path.exists(CSV_PATH):
+        print(f" CSV file not found: {CSV_PATH}")
+        return False
+    print(f" CSV file exists")
+    
+    # Check images directory
+    print("\n3. Checking images directory...")
+    if not os.path.exists(APEX_IMAGES_ROOT):
+        print(f" Images directory not found: {APEX_IMAGES_ROOT}")
+        return False
+    print(f" Images directory exists")
+    
+    # Load model
+    print("\n4. Loading model...")
+    try:
+        model = OpenCVFERModel(MODEL_PATH, contempt_strategy=CONTEMPT_STRATEGY)
+        print(" Model loaded successfully")
+    except Exception as e:
+        print(f" Failed to load model: {e}")
+        return False
+    
+    # Test on sample
+    print("\n5. Testing on sample image...")
+    try:
+        # Find a test image
+        apex_root = Path(APEX_IMAGES_ROOT)
+        sample_image = None
+        
+        for emotion in ['happy', 'sad', 'anger']:
+            emotion_dir = apex_root / emotion
+            if emotion_dir.exists():
+                images = list(emotion_dir.glob('*.jpg'))
+                if images:
+                    sample_image = images[0]
+                    break
+        
+        if sample_image is None:
+            print(" No sample image found")
+            return True
+        
+        print(f"  Testing with: {sample_image.name}")
+        
+        # Predict
+        prediction = model.predict(sample_image)
+        
+        if prediction is None:
+            print("   Prediction was excluded (contempt)")
+        else:
+            print(f"    Prediction successful")
+            print(f"    Strategy: {prediction['strategy']}")
+            print(f"    Predicted: {prediction['predicted_label']}")
+            print(f"    Confidence: {prediction['confidence']:.4f}")
+            
+            if prediction.get('is_masked'):
+                print(f"    Original top-1: {prediction['original_top_class']}")
+                print(f"    After masking: {prediction['predicted_label']}")
+            
+            # Verify probability format
+            prob_sum = sum(prediction['probabilities'].values())
+            print(f"    Probability sum: {prob_sum:.6f}")
+            
+            if abs(prob_sum - 1.0) > 0.01:
+                print(f"   Probability sum != 1.0")
+                return False
+            
+            print(f"   Probability format correct")
+    
+    except Exception as e:
+        print(f" Test prediction failed: {e}")
+        return False
+    
+    print("\n" + "=" * 80)
+    print(" All validation checks passed!")
+    print("=" * 80)
+    
+    return True
+
+
+# Main Function
+
+
+def main():
+    """Main function"""
+    print("=" * 80)
+    print("OpenCV FER+ Testing with Configurable Contempt Handling")
+    print("=" * 80)
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Validate
+    if not validate_model_setup():
+        print("\n✗ Validation failed")
         return
     
-    # Calculate metrics
-    end_time = time.time()
-    total_time = end_time - start_time
+    # Ask user what to do
+    print("\n" + "=" * 80)
+    print("Choose Testing Mode:")
+    print("=" * 80)
+    print("1. Test with current strategy only")
+    print("2. Compare all strategies")
     
-    # Calculate per-class accuracy
-    class_accuracy = {}
-    for label in CMED_LABELS:
-        if class_counts[label] > 0:
-            class_accuracy[label] = (class_correct[label] / class_counts[label]) * 100
-        else:
-            class_accuracy[label] = 0.0
+    choice = input("\nEnter your choice (1 or 2): ").strip()
     
-    # Overall accuracy
-    total_correct = sum(class_correct.values())
-    overall_accuracy = (total_correct / total_images) * 100
+    if choice == '2':
+        # Compare all strategies
+        df_comparison = compare_strategies(CSV_PATH, APEX_IMAGES_ROOT)
+    else:
+        # Test with current strategy
+        model = OpenCVFERModel(MODEL_PATH, contempt_strategy=CONTEMPT_STRATEGY)
+        df_results, stats = test_dataset(model, CSV_PATH, APEX_IMAGES_ROOT, 
+                                         OUTPUT_EXCEL, OUTPUT_JSON)
     
-    # Build confusion matrix
-    true_labels_list = [r['True_Label'] for r in all_results]
-    pred_labels_list = [r['Predicted_Label'] for r in all_results]
-    cm = confusion_matrix(true_labels_list, pred_labels_list, labels=CMED_LABELS)
-    
-    # --- 6. Print Results ---
-    print("\n" + "=" * 60)
-    print("--- OpenCV (DNN) Emotion Recognition Test Results ---")
-    print("=" * 60)
-    print(f"Test Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Total Time: {total_time:.2f} seconds")
-    print(f"Total Images Processed: {total_images}")
-    print(f"Images without detected face: {images_without_face}")
-    print(f"Overall Accuracy: {overall_accuracy:.2f}%")
-    print()
-    
-    # Per-class accuracy
-    print("--- Per-Class Accuracy ---")
-    for label in CMED_LABELS:
-        count = class_counts[label]
-        correct = class_correct[label]
-        acc = class_accuracy[label]
-        print(f"{label.capitalize():15s}: {acc:6.2f}% ({correct}/{count})")
-    print()
-    
-    # Confusion Matrix
-    print("--- Confusion Matrix ---")
-    print("Rows = True Label, Columns = Predicted Label")
-    print()
-    # Header
-    header = "True\\Pred".ljust(15)
-    for label in CMED_LABELS:
-        header += f"{label[:8]:>8}"
-    print(header)
-    print("-" * (15 + 8 * len(CMED_LABELS)))
-    
-    # Matrix rows
-    for i, true_label in enumerate(CMED_LABELS):
-        row = f"{true_label[:14]:14s}"
-        for j, pred_label in enumerate(CMED_LABELS):
-            row += f"{cm[i, j]:8d}"
-        print(row)
-    print()
-    
-    # --- 7. Save Results to CSV ---
-    try:
-        df = pd.DataFrame(all_results)
-        df.to_csv(RESULTS_CSV, index=False, encoding='utf-8')
-        print(f" Results saved to: {RESULTS_CSV}")
-        print(f"  Total rows: {len(all_results)}")
-    except Exception as e:
-        print(f"ERROR: Could not write CSV to {RESULTS_CSV}. Error: {e}")
-        # Fallback: try with csv module
-        try:
-            with open(RESULTS_CSV, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=['True_Label', 'Predicted_Label', 'Is_Correct', 'Confidence_Score'])
-                writer.writeheader()
-                writer.writerows(all_results)
-            print(f" Results saved to: {RESULTS_CSV} (using csv module)")
-        except Exception as e2:
-            print(f"ERROR: CSV write failed completely. Error: {e2}")
-    
-    print("=" * 60)
+    print(f"\n{'='*80}")
+    print("All Done!")
+    print("=" * 80)
+    print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
 
 if __name__ == "__main__":
-    run_opencv_test()
+    main()
