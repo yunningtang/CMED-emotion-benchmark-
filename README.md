@@ -187,8 +187,8 @@ The charts below illustrate the detailed breakdown of the FaceNet performance:
   * **Right (Figure 2):** The Confusion Matrix showing prediction distribution.
 
 \<p align="center"\>
-\<img src="./images/DeepFace\_FaceNet1.png" alt="FaceNet Accuracy per Emotion" width="45%" /\>
-\<img src="./images/DeepFace\_FaceNet2.png" alt="FaceNet Confusion Matrix" width="45%" /\>
+\<img src="./DeepFace_FaceNet1.png" alt="FaceNet Accuracy per Emotion" width="45%" /\>
+\<img src="./DeepFace_FaceNet2.png" alt="FaceNet Confusion Matrix" width="45%" /\>
 \</p\>
 
 -----
