@@ -148,6 +148,50 @@ The confusion matrix provides a deeper insight into misclassifications. Notable 
 
 # 2. Deepface - FaceNet2 
 
+Here is the drafted **DeepFace** section for your README in English.
+
+I have structured it to professionally explain the testing of the three models while highlighting the unusual finding (identical accuracy) and focusing the visual results on FaceNet as requested.
+
+-----
+
+# 2\. DeepFace Benchmark
+
+To further evaluate performance, we utilized the **DeepFace** framework, a lightweight hybrid face recognition and facial attribute analysis framework for Python.
+
+##### 1\. Model Selection & Experimental Setup
+
+We conducted a comparative analysis using three distinct state-of-the-art backends available within the DeepFace library:
+
+1.  **FaceNet** (Google)
+2.  **FaceNet512** (FaceNet with 512-d embeddings)
+3.  **VGG-Face** (Oxford)
+
+**Unexpected Uniformity in Performance:**
+A notable observation from our experiments was that **all three models achieved the exact same overall accuracy of 21.21%** (`0.212095797222999`).
+
+This identical performance across different architectures suggests a systematic bottleneck. It indicates that the performance constraints are likely due to the domain gap (DeepFace models are primarily trained on adult datasets like VGGFace2/Google Face, whereas CMED contains children) or the specific face alignment/detection pre-processing steps used in the DeepFace pipeline, rather than the feature extraction capabilities of the specific backends.
+
+##### 2\. Benchmark Results: FaceNet
+
+Given the identical metrics across the tested backends, we present the visual analysis for the **FaceNet** model as the representative performance indicator.
+
+**Overall Accuracy: 21.21%**
+
+The results indicate that off-the-shelf DeepFace models struggle significantly with the CMED dataset without fine-tuning.
+
+**Performance Visualization**
+
+The charts below illustrate the detailed breakdown of the FaceNet performance:
+
+  * **Left (Figure 1):** Accuracy per individual emotion category.
+  * **Right (Figure 2):** The Confusion Matrix showing prediction distribution.
+
+\<p align="center"\>
+\<img src="./images/DeepFace\_FaceNet1.png" alt="FaceNet Accuracy per Emotion" width="45%" /\>
+\<img src="./images/DeepFace\_FaceNet2.png" alt="FaceNet Confusion Matrix" width="45%" /\>
+\</p\>
+
+-----
 
 
 # 3. LibraFace 
