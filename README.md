@@ -126,8 +126,27 @@ Prediction: This new top-scoring emotion is used as the final prediction for acc
 
 I apply `np.argmax` to the output scores to identify the dominant emotion. This prediction is then compared against the CMED ground truth to calculate the final accuracy metric.
 
+###### Benchmark Results
 
-# 2. Deepface - VGG Face
+The following visualizations detail the performance of the OpenCV FER+ model on the CMED dataset.
+
+**Overall Accuracy per Emotion**
+
+The chart below illustrates the model's prediction accuracy across the seven CMED categories. While the model performs reasonably well on **Neutral** and **Happy** samples, it struggles significantly with **Disgust** and **Anger**, likely due to the domain gap between the training set (FER+) and the target dataset (CMED children).
+
+<p align="center">
+  <img src="./OpenCVFER1.png" alt="Accuracy per Emotion" width="600">
+</p>
+
+**Confusion Matrix**
+
+The confusion matrix provides a deeper insight into misclassifications. Notable observations include a tendency for the model to misclassify 'Fear' and 'Surprise' as 'Neutral', indicating a potential sensitivity issue with subtle expressions in this specific architecture.
+
+<p align="center">
+  <img src="./OpenCVFER2.png" alt="Confusion Matrix" width="600">
+</p>
+
+# 2. Deepface - FaceNet2 
 
 
 
